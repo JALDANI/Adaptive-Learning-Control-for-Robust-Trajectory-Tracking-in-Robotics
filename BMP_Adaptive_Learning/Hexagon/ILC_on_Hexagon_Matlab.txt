@@ -1,0 +1,486 @@
+clc
+tic
+clear
+close all
+s = struct();  
+s.units = 'inches';
+s.format = 'pdf';
+s.Preview = 'none';
+s.Width = 8;  % Changed from '8' to 8
+s.Height = 5;  % Changed from '5' to 5
+s.Units = 'inches';
+s.Color = 'rgb';
+s.Background = 'w';
+s.FixedfontSize = 12;  % Changed from '12' to 12
+s.ScaledfontSize = 'auto';
+s.FontMode = 'scaled';
+s.FontSizeMin = 12;  % Changed from '12' to 12
+s.FixedLineWidth = 1;  % Changed from '1' to 1
+s.ScaledLineWidth = 'auto';
+s.LineMode = 'none';
+s.LineWidthMin = 0.1;  % Changed from '0.1' to 0.1
+s.FontName = 'Times New Roman'; 
+s.FontWeight = 'auto';
+s.FontAngle = 'auto';
+s.FontEncoding = 'latin1';
+s.PSLevel = 3;  % Changed from '3' to 3
+s.Renderer = 'painters';
+s.Resolution = 300;  % Changed from '300' to 300
+s.LineStyleMap = 'none';
+s.ApplyStyle = 0;  % Changed from '0' to 0
+s.Bounds = 'tight';
+s.LockAxes = 'off';
+s.LockAxesTicks = 'off';
+s.ShowUI = 'off';
+s.SeparateText = 'off';
+
+%% Initialization
+num_trials=100;
+ts=0.01;% Sampling time interval
+paradigm_trials= 7*num_trials;% Total number of trials in the paradigm
+time=1;
+duration=time;
+export_plots_to_png=0;
+export_plots_to_pdf=1;
+%% System definition
+m1=0.2;% mass of link 1
+m2=0.2;% mass of link 2
+lc1=0.1;% midlength of link 1
+lc2=0.1;% midlength of link 2
+I1=1/3*m1*(2*lc1); % M. I. of link 1
+I2=1/3*m2*(2*lc2); % M. I. of link 2
+Q1=pi/4; % Equilibrium point of q1
+Q2=-pi/2; % Equilibrium point of q2
+d1=0.3;% Damping 1
+d2=0.3;% Damping 2
+% Inverse of inertia matrix
+%   ||                 ||
+%   \/                 \/
+Dinv =[(m2*lc2^2 + I2)/(I1*I2 + 4*lc1*lc2^2*m2^2 + 4*I2*lc1*m2 + I2*lc1^2*m1 + I1*lc2^2*m2 + lc1^2*lc2^2*m1*m2 - 4*lc1^2*lc2^2*m2^2*cos(Q2)^2),                           -(m2*lc2^2 + 2*lc1*m2*cos(Q2)*lc2 + I2)/(I1*I2 + 4*lc1*lc2^2*m2^2 + 4*I2*lc1*m2 + I2*lc1^2*m1 + I1*lc2^2*m2 + lc1^2*lc2^2*m1*m2 - 4*lc1^2*lc2^2*m2^2*cos(Q2)^2);
+    -(m2*lc2^2 + 2*lc1*m2*cos(Q2)*lc2 + I2)/(I1*I2 + 4*lc1*lc2^2*m2^2 + 4*I2*lc1*m2 + I2*lc1^2*m1 + I1*lc2^2*m2 + lc1^2*lc2^2*m1*m2 - 4*lc1^2*lc2^2*m2^2*cos(Q2)^2), (m1*lc1^2 + 4*m2*cos(Q2)*lc1*lc2 + 4*m2*lc1 + m2*lc2^2 + I1 + I2)/(I1*I2 + 4*lc1*lc2^2*m2^2 + 4*I2*lc1*m2 + I2*lc1^2*m1 + I1*lc2^2*m2 + lc1^2*lc2^2*m1*m2 - 4*lc1^2*lc2^2*m2^2*cos(Q2)^2)];
+a11=zeros(2,2);
+a12=eye(2);
+a21=a11;
+a22=-Dinv*diag([d1,d2]);
+b11=a11;
+b12=Dinv*eye(2);
+%% LAD: System based on 2R
+Ac=[a11 a12;a21 a22]; % Continuous-time A matrix
+Bc=[b11;b12]; % Continuous-time B matrix
+A=0.5*(eye(size(Ac,1))+Ac*ts); % Discrete-time A matrix
+B=Bc; % Discrete-time B matrix
+C=[1 0 0 0;0 1 0 0];
+[~,n]=size(A);
+[l,m]=size(C*B);
+%% Controller Equations Parameterization
+lambda_ILC=1;% Determination factor (Can you change this by explicit instructions?)
+lambda_pred=0.7;
+lambda_FF=0.7;% Confidence on the internal learnt model
+gamma_ILC=0.1;% Initial learning rate
+gamma_pred=0.2; %Initial learning rate
+gamma_FF=0.1; %|| Range: 0.05:0.1
+nx=0.0;% Noise levels
+ny=0.0;% Noise levels
+
+%% Parameters for Hexagonal Trajectory
+beta = -0.1; % Feedforward perturbation
+alpha = 15;  % Velocity-dependent perturbation
+th1 = pi/4;  % Left-side rotation perturbation (45 degrees)
+th2 = -pi/4; % Right-side rotation perturbation (-45 degrees)
+
+% Enable flags
+enableVMR = 0;
+enableFFPT = 0;
+enableVLPT = 0;
+
+%% Trajectory Generation  
+% Define time step and total duration  
+total_steps = length(0:ts:time);  
+yd1 = zeros(2, total_steps);  
+yd = zeros(2, total_steps); 
+ydx = zeros(2, total_steps);
+
+t = 0;  
+duration = time / 6;  % 6 segments for hexagon  
+
+% Hexagon parameters
+side_length = 0.4;  
+xc = 0.5; % Center x  
+yc = 0.5; % Center y  
+
+% Hexagon vertices (counterclockwise)
+theta_hex = linspace(0, 2*pi, 7);  
+x_hex = xc + side_length * cos(theta_hex);  
+y_hex = yc + side_length * sin(theta_hex);  
+
+for loop_time = 0:ts:time  
+    t = t + 1;  
+    segment_time = mod(loop_time, duration);  
+    s = (10*(segment_time/duration)^3 - 15*(segment_time/duration)^4 + 6*(segment_time/duration)^5);  
+
+    % Determine current segment
+    segment = floor(loop_time / duration) + 1;
+    if segment > 6  
+        segment = 6;  
+    end  
+
+    % Start and end points of current segment
+    x_start = x_hex(segment);  
+    y_start = y_hex(segment);  
+    x_end = x_hex(segment+1);  
+    y_end = y_hex(segment+1);  
+
+    % Linear interpolation for hexagonal path
+    x = x_start + s * (x_end - x_start);  
+    y = y_start + s * (y_end - y_start);  
+
+    yd1(:,t) = [x; y];  
+end  
+
+
+%% Init. variables
+for KK=-1:1
+norme=0;
+plot_surf=0;
+y_=zeros(size(yd));
+uILC_=y_;
+ypred_=y_;
+ypred=ypred_;
+Y=ypred(:,1:end);
+Y_=Y;
+uFF_=uILC_;
+uFF=uFF_;
+uILC=uFF;
+u=uFF;
+u_=u;
+VMR=y_;
+FFPT=Y_;
+VLPT=0;
+pred_term_=uILC_;
+yFF=y_;
+yILC=y_;
+TE=y_;
+SPE=y_;
+MOE=y_;
+E=y_;
+E_=zeros(1,paradigm_trials);
+YendP=y_;
+perception=VMR;
+normy = zeros(1, paradigm_trials);
+normFF = zeros(1, paradigm_trials);
+normuILC = zeros(1, paradigm_trials);
+normTE = zeros(1, paradigm_trials);
+normSPE = zeros(1, paradigm_trials);
+normMOE = zeros(1, paradigm_trials);
+normu = zeros(1, paradigm_trials);
+normuFF = zeros(1, paradigm_trials);
+IT = zeros(1, paradigm_trials);
+MT = zeros(1, paradigm_trials);
+
+
+%% Across-the-Trials for loop
+fg1 = figure(1);
+
+for k = 1:paradigm_trials
+    x = zeros(n, length(yd));
+    xILC = zeros(n, length(yd));
+    xFF = xILC;
+    y = C * x;    
+    
+    %% Across-the-Time for loop
+    t=0;
+    TE = zeros(size(yd, 1), total_steps + 2);
+    SPE = zeros(size(yd, 1), total_steps + 2);
+    MOE = zeros(size(yd, 1), total_steps + 2);
+    ypred = zeros(size(yd, 1), total_steps + 2);
+
+    for loop_time=0:ts:time-1*ts
+        vdx=[0 1;0 0]*[[0;0] (diff(y_'))'];
+        
+        %% Perturbation Compututations
+        if k <= (4 * num_trials)  % Baseline
+            yd = yd1;
+            VMR = [0; 0];
+            RR = eye(2);
+            FFPT = [0; 0];
+            VLPT = 0;
+        elseif (k >= (4 * num_trials + 1)) && (k <= (5 * num_trials))  % PERT PT
+            RR = [cosd(-45) -sind(-45); sind(-45) cosd(-45)];
+            yd = RR * yd1;
+            VMR = [0; 0];
+            FFPT = [0; 0];
+            VLPT = 0;
+        elseif (k >= (5 * num_trials + 1)) && (k <= (6 * num_trials))  % Washout
+            yd = yd1;
+            VMR = [0; 0];
+            RR = eye(2);
+            FFPT = [0; 0];
+            VLPT = 0;
+        elseif (k >= (6 * num_trials + 1)) && (k <= (7 * num_trials))  % PERT PT again
+            RR = [cosd(45) -sind(45); sind(45) cosd(45)];
+            yd = RR * yd1;
+            VMR = [0; 0];
+            FFPT = [0; 0];
+            VLPT = 0;
+        end
+        for t = 1:(total_steps-2)  % Prevent out-of-bounds errors
+                TE(:,t+2) = yd(:,t+2) - (RR * y_(:,t+2));
+                SPE(:,t+2) = C * A * B * u_(:,t) - ypred(:,t+2);
+                MOE(:,t+2) = (RR) * y_(:,t+2) - ypred(:,t+2);
+
+        
+                %% Error Definitions
+                if (log(norm(TE(:,t+2)))>=-5)
+                    %% Learning Controller Model
+                    uILC(:,t)=lambda_ILC*uILC_(:,t)+gamma_ILC*tanh(TE(:,t+2));
+                    ypred(:,t+2)=lambda_pred*ypred_(:,t+2)+gamma_pred*tanh(MOE(:,t+2));
+                    uFF(:,t)=lambda_FF*uFF_(:,t)+gamma_FF*pinv(C*A*B)*tanh((SPE(:,t+2)));
+                    u(:,t)=1*uILC(:,t)+1*uFF(:,t);
+                else
+                    u(:,t)=u_(:,t);
+                end
+              x(:,t+1)=A*x(:,t)+nx*rand(n,1)+B*(u(:,t)+pinv(C*A*B)*FFPT+VLPT.*vdx(:,t));
+              y(:,t)=C*x(:,t)+ny*rand(l,1);
+        end
+    end
+    %% Save data for next iteration
+    uILC_=uILC;% ILC data
+    y_=y;% output data
+    ypred_=ypred;% pred data
+    Y_=Y;
+    uFF_=uFF;
+    u_=u;
+    normTE(1,k)=norm(TE(:,1:(time/ts)));
+    normSPE(1,k)=norm(SPE(:,1:(time/ts)));
+    normMOE(1,k)=norm(MOE(:,1:(time/ts)));
+    normuFF(1,k)=norm(uFF(:,1:(time/ts)-2));
+    normu(1,k)=norm(u(:,1:(time/ts)-2));
+    normuILC(1,k)=norm(uILC(:,1:(time/ts)-2));
+    
+    for k1=1:l
+        E(k1,k)=(norm(abs(yd(k1,1:(time/ts))-y(k1,1:(time/ts)))).^2);
+    end
+    if norme==0
+        E_(:,k)=norm(yd(:,1:(time/ts))-y(:,1:(time/ts)));
+    end
+    if norme==1
+        E_(:,k)=norm(yd(:,1:(time/ts))-y(:,1:(time/ts)))/norm(yd(:,1:(time/ts)));
+    end
+    if k == (4 * num_trials), y1 = y; x1 = x; end
+    if k == (5 * num_trials), y2 = y; x2 = x; end
+    if k == (6 * num_trials), y3 = y; x3 = x; end
+    if k == (7 * num_trials), y4 = y; x4 = x; end
+
+    YendP(1,k)=y(1,end-1);
+    
+   set(0, 'CurrentFigure', fg1);
+if k <= (2*num_trials)  % Baseline
+    if rem(k, 20) == 0 || k == (2*num_trials + 1)
+        subplot(1, 4, 1); hold on;
+        plot(y(1, 1:end-2), y(2, 1:end-2), 'b-', 'LineWidth', 0.1);
+        xlabel('X (m)'); ylabel('Y (m)'); title('Baseline'); ylim([0 1.1]);
+    end
+elseif k >= (4*num_trials+1) && k <= (5*num_trials)  % PERT PT
+    if rem(k, 20) == 0 || k == (4*num_trials + 1)
+        subplot(1, 4, 2); hold on;
+        plot(y(1, 1:end-2), y(2, 1:end-2), 'b-', 'LineWidth', 0.1);
+        xlabel('X (m)'); ylabel('Y (m)'); title('PT1'); ylim([0 1.1]);
+    end
+elseif k >= num_trials*5+1 && k <= num_trials*6  % Washout
+    if rem(k, 20) == 0 || k == (5*num_trials + 1)
+        subplot(1, 4, 3); hold on;
+        plot(y(1, 1:end-2), y(2, 1:end-2), 'b-', 'LineWidth', 0.1);
+        xlabel('X (m)'); ylabel('Y (m)'); title('Washout'); ylim([0 1.1]);
+    end
+elseif k >= num_trials*6+1 && k <= num_trials*7  % PERT PT again
+    if rem(k, 20) == 0 || k == (6*num_trials + 1)
+        subplot(1, 4, 4); hold on;
+        plot(y(1, 1:end-2), y(2, 1:end-2), 'b-', 'LineWidth', 0.1);
+        xlabel('X (m)'); ylabel('Y (m)'); title('PT2'); ylim([0 1.1]);
+    end
+end
+
+end
+%% Plotting
+figure(1);
+hold on;
+
+subplot(1,4,1);
+hold on;
+plot(yd1(1,1:end-2), yd1(2,1:end-2), 'r--', 'LineWidth', 2);
+xlabel('X (m)'); ylabel('Y (m)'); ylim([0 0.6]);
+title('Baseline');
+
+subplot(1,4,2);
+hold on;
+plot(-0.5 * ydx(1,1:end-2), ydx(2,1:end-2), 'r--', 'LineWidth', 2);
+xlabel('X (m)'); ylabel('Y (m)'); ylim([0 0.6]);
+title('PT1');
+
+subplot(1,4,3);
+hold on;
+plot(yd1(1,1:end-2), yd1(2,1:end-2), 'r--', 'LineWidth', 2);
+xlabel('X (m)'); ylabel('Y (m)'); ylim([0 0.6]);
+title('Washout');
+
+subplot(1,4,4);
+hold on;
+plot(ydx(1,1:end-2), ydx(2,1:end-2), 'r--', 'LineWidth', 2);
+xlabel('X (m)'); ylabel('Y (m)'); ylim([0 0.6]);
+title('PT2');
+
+%% Converged trajectories
+subplot(1,4,1)
+hold on
+plot(y1(1,1:end-2), y1(2,1:end-2), 'g-', 'LineWidth', 1)
+ylim([0 0.6])
+
+subplot(1,4,2)
+hold on
+plot(y2(1,1:end-2), y2(2,1:end-2), 'g-', 'LineWidth', 1)
+ylim([0 0.6])
+
+subplot(1,4,3)
+hold on
+plot(y3(1,1:end-2), y3(2,1:end-2), 'g-', 'LineWidth', 1)
+ylim([0 0.6])
+
+subplot(1,4,4)
+hold on
+plot(y4(1,1:end-2), y4(2,1:end-2), 'g-', 'LineWidth', 1)
+ylim([0 0.6])
+
+if export_plots_to_pdf
+    hgexport(gcf, 'ConvergedXY.pdf');
+end
+
+%% Error plots
+figure(2)
+plot(normTE, 'LineWidth', 1); hold on;
+plot(normSPE, 'LineWidth', 1);
+plot(normMOE, 'LineWidth', 1);
+grid on;
+
+xlabel('Iterations (k)')
+ylabel('Norm of individual components')
+legend('TE','SPE','MOE','Location','northwest')
+title(['\gamma_{ILC}=', num2str(gamma_ILC), ', \gamma_{FF}=', num2str(gamma_FF), ', \gamma_{pred}=', num2str(gamma_pred), ', \lambda_{ILC}=', num2str(lambda_ILC), ', \lambda_{FF}=', num2str(lambda_FF), ', \lambda_{pred}=', num2str(lambda_pred)])
+
+if export_plots_to_pdf
+    hgexport(gcf, 'ErrorProportions.pdf');
+end
+
+%% Error trends
+figure(3)
+subplot(211)
+stem(E_, 'LineWidth', 0.1, 'MarkerSize', 0.1); hold on;
+plot(E_, 'LineWidth', 0.5);
+grid on;
+xlabel('Iterations (k)')
+ylabel('||E||_2=||y_{ref,k}-y_k||_2')
+title(['\gamma_{ILC}=', num2str(gamma_ILC), ', \gamma_{FF}=', num2str(gamma_FF), ', \gamma_{pred}=', num2str(gamma_pred), ', \lambda_{ILC}=', num2str(lambda_ILC), ', \lambda_{FF}=', num2str(lambda_FF), ', \lambda_{pred}=', num2str(lambda_pred)])
+
+subplot(212)
+stem(log(E_), 'LineWidth', 0.1, 'MarkerSize', 0.1); hold on;
+plot(log(E_), 'LineWidth', 0.5);
+grid on;
+xlabel('Iterations (k)')
+ylabel('log(||E||_2)')
+
+if export_plots_to_pdf
+    hgexport(gcf, 'Errors.pdf');
+end
+
+%% Baseline plot
+figure(9)
+subplot(211)
+stem(1:paradigm_trials-3*num_trials, E_(:,1:length(1:paradigm_trials-3*num_trials)), 'LineWidth', 0.1, 'MarkerSize', 0.1); hold on;
+plot(1:paradigm_trials-3*num_trials, E_(:,1:length(1:paradigm_trials-3*num_trials)), 'LineWidth', 0.5);
+xlim([0*num_trials+1 2*num_trials]);
+grid on;
+xlabel('Iterations (k)')
+ylabel('||E||_2=||y_{ref,k}-y_k||_2')
+title(['\gamma_{ILC}=', num2str(gamma_ILC), ', \gamma_{FF}=', num2str(gamma_FF), ', \gamma_{pred}=', num2str(gamma_pred), ', \lambda_{ILC}=', num2str(lambda_ILC), ', \lambda_{FF}=', num2str(lambda_FF), ', \lambda_{pred}=', num2str(lambda_pred)])
+
+subplot(212)
+stem(1:paradigm_trials-3*num_trials, log(E_(:,1:length(1:paradigm_trials-3*num_trials))), 'LineWidth', 0.1, 'MarkerSize', 0.1); hold on;
+plot(1:paradigm_trials-3*num_trials, log(E_(:,1:length(1:paradigm_trials-3*num_trials))), 'LineWidth', 0.5);
+xlim([0*num_trials+1 2*num_trials]);
+grid on;
+xlabel('Iterations (k)')
+ylabel('log(||E||_2)')
+
+if export_plots_to_pdf
+    hgexport(gcf, 'BaselineError.pdf');
+end
+figure(10)
+plot(normu);
+hold on
+plot(normuFF);
+plot(normuILC)
+grid on
+xlabel('Iterations (k)')
+ylabel('Norm of individual components')
+legend('||u_k||_2','||u_{FF,k}||_2','||u_{ILC,k}||_2','Location','northwest')
+title(['\gamma_{ILC}=',num2str(gamma_ILC),', \gamma_{FF}=',num2str(gamma_FF),', \gamma_{pred}=',num2str(gamma_pred),', \lambda_{ILC}=',num2str(lambda_ILC),', \lambda_{FF}=',num2str(lambda_FF),', \lambda_{pred}=',num2str(lambda_pred)])
+
+if export_plots_to_pdf==1
+    set(gcf, 'PaperUnits', 'inches', 'PaperPosition', [0 0 8 5], 'PaperSize', [8 5]);
+    print(gcf, 'ContribBaseline.pdf', '-dpdf');
+end
+
+%% Matched Trials
+figure(11)
+hold on
+plot(1:num_trials*1,((E_(num_trials*3+1:4*num_trials))),'k:','LineWidth',2)
+plot(1:num_trials*1,((E_(num_trials*4+1:5*num_trials))),'m','LineWidth',1.5)
+plot(1:num_trials*1,((E_(num_trials*5+1:6*num_trials))),'g--','LineWidth',2)
+plot(1:num_trials*1,((E_(num_trials*6+1:7*num_trials))),'b','LineWidth',1.5)
+legend(['Baseline, \Sigma=',num2str(sum(((E_(num_trials*3+1:4*num_trials)))))],...
+    [' PT1, \Sigma=',num2str(sum(((E_(num_trials*4+1:5*num_trials)))))],...
+    ['Washout, \Sigma=',num2str(sum(((E_(num_trials*5+1:6*num_trials)))))],...
+    [' PT2, \Sigma=',num2str(sum(((E_(num_trials*6+1:7*num_trials)))))])%,' PT', 'Washout', ' PT'}
+xlabel('Matched Iterations (k)')
+ylabel('||E||_2')
+grid on
+title(['\gamma_{ILC}=',num2str(gamma_ILC),', \gamma_{FF}=',num2str(gamma_FF),', \gamma_{pred}=',num2str(gamma_pred),', \lambda_{ILC}=',num2str(lambda_ILC),', \lambda_{FF}=',num2str(lambda_FF),', \lambda_{pred}=',num2str(lambda_pred)])
+
+if export_plots_to_pdf==1
+    set(gcf, 'PaperUnits', 'inches', 'PaperPosition', [0 0 8 5], 'PaperSize', [8 5]);
+    print(gcf, 'Matched_iterations_E.pdf', '-dpdf');
+end
+
+%%
+figure(12)
+plot(normuFF,'LineWidth',2); hold on
+plot(normu,'LineWidth',2)
+plot(normuILC,'LineWidth',2)
+grid on
+xlabel('Iterations (k)')
+ylabel('Norm of individual components')
+legend('||u_{FF,k}||_2','||u_k||_2','||u_{ILC,k}||_2','Location','Northwest')
+title(['\gamma_{ILC}=',num2str(gamma_ILC),', \gamma_{FF}=',num2str(gamma_FF),', \gamma_{pred}=',num2str(gamma_pred),', \lambda_{ILC}=',num2str(lambda_ILC),', \lambda_{FF}=',num2str(lambda_FF),', \lambda_{pred}=',num2str(lambda_pred)])
+xlim([400 500])
+
+if export_plots_to_pdf==1
+    set(gcf, 'PaperUnits', 'inches', 'PaperPosition', [0 0 6 4], 'PaperSize', [6 6]);
+    print(gcf, 'SlowFast.pdf', '-dpdf');
+end
+
+%%
+figure(13)
+stem(E_(:,301:end),'LineWidth',0.1,'MarkerSize',0.1)
+hold on
+plot(E_(:,301:end),'LineWidth',0.5)
+grid on
+xlabel('Iterations (k)')
+ylabel('||E||_2=||y_{ref,k}-y_k||_2')
+title(['\gamma_{ILC}=',num2str(gamma_ILC),', \gamma_{FF}=',num2str(gamma_FF),', \gamma_{pred}=',num2str(gamma_pred),', \lambda_{ILC}=',num2str(lambda_ILC),', \lambda_{FF}=',num2str(lambda_FF),', \lambda_{pred}=',num2str(lambda_pred)])
+
+if export_plots_to_pdf==1
+    set(gcf, 'PaperUnits', 'inches', 'PaperPosition', [0 0 8 5], 'PaperSize', [8 5]);
+    print(gcf, 'Error_PT.pdf', '-dpdf');
+end
+
+
+end
